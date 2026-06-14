@@ -3,7 +3,13 @@ from datetime import date
 from flask import Blueprint, jsonify, request
 
 from ..extensions import db
-from ..models import PurchaseOrder, PurchaseOrderItem
+from ..models import (
+    PurchaseOrder,
+    PurchaseOrderItem,
+    STATUS_LABELS,
+    can_transition,
+    get_next_actions_hint,
+)
 
 orders_bp = Blueprint("orders", __name__)
 
@@ -46,6 +52,41 @@ def create_order():
 def update_order_status(order_id):
     order = PurchaseOrder.query.get_or_404(order_id)
     data = request.get_json() or {}
-    order.status = data.get("status", order.status)
+    target_status = data.get("status")
+
+    if not target_status:
+        return (
+            jsonify(
+                {
+                    "error": "缺少目标状态",
+                    "currentStatus": order.status,
+                    "currentStatusLabel": STATUS_LABELS.get(order.status, order.status),
+                    "nextActionsHint": get_next_actions_hint(order.status),
+                }
+            ),
+            400,
+        )
+
+    if target_status == order.status:
+        return order.to_dict()
+
+    if not can_transition(order.status, target_status):
+        current_label = STATUS_LABELS.get(order.status, order.status)
+        target_label = STATUS_LABELS.get(target_status, target_status)
+        return (
+            jsonify(
+                {
+                    "error": f"非法状态流转：无法从「{current_label}」改为「{target_label}」",
+                    "currentStatus": order.status,
+                    "currentStatusLabel": current_label,
+                    "targetStatus": target_status,
+                    "targetStatusLabel": target_label,
+                    "nextActionsHint": get_next_actions_hint(order.status),
+                }
+            ),
+            400,
+        )
+
+    order.status = target_status
     db.session.commit()
     return order.to_dict()
