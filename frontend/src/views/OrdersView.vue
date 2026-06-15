@@ -52,10 +52,10 @@
         <div class="status-cell">
           <select
             :value="row.status"
-            :disabled="!hasAvailableTransitions(row.status)"
+            :disabled="isStatusDisabled(row)"
             @change="changeStatus(row, $event.target.value)"
           >
-            <option v-for="opt in getStatusOptions(row.status)" :key="opt.value" :value="opt.value">
+            <option v-for="opt in getStatusOptions(row)" :key="opt.value" :value="opt.value">
               {{ opt.label }}
             </option>
           </select>
@@ -76,17 +76,12 @@ import { inventoryApi } from '../api/inventory'
 import { ordersApi } from '../api/orders'
 import DataTable from '../components/DataTable.vue'
 import PageHeader from '../components/PageHeader.vue'
-import {
-  STATUS_LABELS,
-  canTransition,
-  getAvailableTransitions,
-  getNextActionsHint,
-  getStatusLabel
-} from '../utils/orderStatus'
+import { STATUS_LABELS } from '../utils/orderStatus'
 
 const orders = ref([])
 const suppliers = ref([])
 const ingredients = ref([])
+const submittingOrderId = ref(null)
 const form = reactive({
   orderNo: `PO${new Date().toISOString().slice(0, 10).replaceAll('-', '')}001`,
   supplierId: null,
@@ -120,15 +115,21 @@ function addLine() {
   Object.assign(line, { ingredientId: null, quantity: 1, unitPrice: 0 })
 }
 
-function hasAvailableTransitions(currentStatus) {
-  return getAvailableTransitions(currentStatus).length > 0
+function labelOf(status) {
+  return STATUS_LABELS[status] || status
 }
 
-function getStatusOptions(currentStatus) {
-  const available = getAvailableTransitions(currentStatus)
-  const options = [{ value: currentStatus, label: getStatusLabel(currentStatus) + ' (当前)' }]
+function isStatusDisabled(row) {
+  if (submittingOrderId.value === row.id) return true
+  const available = row.availableTransitions || []
+  return available.length === 0
+}
+
+function getStatusOptions(row) {
+  const available = row.availableTransitions || []
+  const options = [{ value: row.status, label: `${row.statusLabel || labelOf(row.status)} (当前)` }]
   available.forEach((s) => {
-    options.push({ value: s, label: '→ ' + getStatusLabel(s) })
+    options.push({ value: s, label: `→ ${labelOf(s)}` })
   })
   return options
 }
@@ -155,16 +156,19 @@ async function submitOrder() {
 
 async function changeStatus(order, targetStatus) {
   if (targetStatus === order.status) return
+  if (submittingOrderId.value) return
 
-  if (!canTransition(order.status, targetStatus)) {
-    const currentLabel = STATUS_LABELS[order.status] || order.status
-    const targetLabel = STATUS_LABELS[targetStatus] || targetStatus
-    const hint = getNextActionsHint(order.status)
-    alert(`非法状态流转：无法从「${currentLabel}」改为「${targetLabel}」\n\n${hint}`)
+  const currentLabel = order.statusLabel || labelOf(order.status)
+  const targetLabel = labelOf(targetStatus)
+  const confirmed = window.confirm(
+    `确定要将订单「${order.orderNo}」的状态从「${currentLabel}」改为「${targetLabel}」吗？`
+  )
+  if (!confirmed) {
     await loadOrders()
     return
   }
 
+  submittingOrderId.value = order.id
   try {
     await ordersApi.updateStatus(order.id, targetStatus)
     await loadOrders()
@@ -176,6 +180,8 @@ async function changeStatus(order, targetStatus) {
       alert('状态更新失败，请稍后重试')
     }
     await loadOrders()
+  } finally {
+    submittingOrderId.value = null
   }
 }
 
